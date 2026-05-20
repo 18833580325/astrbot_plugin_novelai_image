@@ -4,6 +4,7 @@ import json
 import random
 import re
 import shlex
+import time
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -64,6 +65,7 @@ class NovelAIImagePlugin(Star):
         super().__init__(context)
         self.config = config
         self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
+        self._output_dir = Path("/AstrBot/data/plugin_data/novelai_image/outputs")
 
     @filter.command("nai", alias={"novelai", "nai画图", "nai生图"})
     async def generate(self, event: AstrMessageEvent):
@@ -103,7 +105,8 @@ class NovelAIImagePlugin(Star):
             yield event.plain_result(reason or str(self.config.get("vision_block_reply", "图片未通过审核，已停止发送。")))
             return
 
-        yield event.image_result(self._bytes_to_onebot_image(image_bytes))
+        image_path = self._save_image(image_bytes, request)
+        yield event.image_result(str(image_path))
 
     @filter.command("nai_help", alias={"novelai_help", "nai帮助"})
     async def help(self, event: AstrMessageEvent):
@@ -528,8 +531,12 @@ class NovelAIImagePlugin(Star):
             raise RuntimeError(f"视觉审核 JSON 缺少 allow 字段：{data}")
         return data
 
-    def _bytes_to_onebot_image(self, image_bytes: bytes) -> str:
-        return "base64://" + base64.b64encode(image_bytes).decode("ascii")
+    def _save_image(self, image_bytes: bytes, request: NovelAIRequest) -> Path:
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"nai_{int(time.time())}_{request.seed}.png"
+        path = self._output_dir / filename
+        path.write_bytes(image_bytes)
+        return path
 
     def _clean_api_key(self, api_key: str) -> str:
         return api_key.removeprefix("Bearer ").strip()
