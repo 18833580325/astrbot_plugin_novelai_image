@@ -84,19 +84,19 @@ class NovelAIImagePlugin(Star):
     async def generate(self, event: AstrMessageEvent):
         api_key = self._clean_api_key(str(self.config.get("api_key", "")).strip())
         if not api_key:
-            yield event.plain_result("NovelAI API Key 还没配置，请先在插件配置里填写 api_key。")
+            yield self._mention_sender_result(event, "NovelAI API Key 还没配置，请先在插件配置里填写 api_key。")
             return
 
         sender_id = str(event.get_sender_id())
         policy_error = self._check_usage_policy(sender_id)
         if policy_error:
-            yield event.plain_result(policy_error)
+            yield self._mention_sender_result(event, policy_error)
             return
 
         try:
             request = self._parse_request(event.message_str)
         except ValueError as exc:
-            yield event.plain_result(str(exc))
+            yield self._mention_sender_result(event, str(exc))
             return
 
         if request.llm_optimize:
@@ -111,13 +111,13 @@ class NovelAIImagePlugin(Star):
                     request.prompt = optimized_prompt
             except Exception as exc:
                 logger.error(f"NovelAI prompt optimization failed: {exc}")
-                yield event.plain_result(f"提示词优化失败：{exc}")
+                yield self._mention_sender_result(event, f"提示词优化失败：{exc}")
                 return
 
         try:
             request.prompt = self._apply_prompt_presets(request)
         except ValueError as exc:
-            yield event.plain_result(str(exc))
+            yield self._mention_sender_result(event, str(exc))
             return
         logger.info(
             "NovelAI final prompt prepared. style=%s quality=%s prompt=%s",
@@ -129,14 +129,15 @@ class NovelAIImagePlugin(Star):
         queue_position = self._queue_waiting + (1 if self._generation_lock.locked() else 0)
         self._queue_waiting += 1
         if queue_position > 0:
-            yield event.plain_result(f"已加入 NovelAI 画图队列，前面还有 {queue_position} 个任务。")
+            yield self._mention_sender_result(event, f"已加入 NovelAI 画图队列，前面还有 {queue_position} 个任务。")
 
         async with self._generation_lock:
             self._queue_waiting = max(0, self._queue_waiting - 1)
             if queue_position > 0:
-                yield event.plain_result("轮到你了，开始生成 NovelAI 图片。")
+                yield self._mention_sender_result(event, "轮到你了，开始生成 NovelAI 图片。")
             else:
-                yield event.plain_result(
+                yield self._mention_sender_result(
+                    event,
                     f"已收到，正在用 NovelAI 生成图片：{request.width}x{request.height}，"
                     f"steps={request.steps}，scale={request.scale}"
                 )
@@ -145,7 +146,7 @@ class NovelAIImagePlugin(Star):
                 image_bytes = await self._call_novelai(api_key, request)
             except Exception as exc:
                 logger.error(f"NovelAI image generation failed: {exc}")
-                yield event.plain_result(f"生成失败：{exc}")
+                yield self._mention_sender_result(event, f"生成失败：{exc}")
                 return
 
             try:
@@ -153,7 +154,7 @@ class NovelAIImagePlugin(Star):
             except Exception as exc:
                 logger.error(f"NovelAI image review failed: {exc}")
                 if bool(self.config.get("vision_review_fail_closed", False)):
-                    yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+                    yield self._mention_sender_result(event, f"图片审核失败，已停止发送：{exc}")
                     return
                 allowed, reason = True, ""
 
