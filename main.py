@@ -102,7 +102,9 @@ class NovelAIImagePlugin(Star):
             allowed, reason = True, ""
 
         if not allowed:
-            yield event.plain_result(reason or str(self.config.get("vision_block_reply", "图片未通过审核，已停止发送。")))
+            if reason:
+                logger.warning(f"NovelAI image blocked by vision review: {reason}")
+            yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
             return
 
         image_path = self._save_image(image_bytes, request)
@@ -512,7 +514,7 @@ class NovelAIImagePlugin(Star):
         allow = bool(review.get("allow", False))
         reason = str(review.get("reason", "")).strip()
         if not allow and not reason:
-            reason = str(self.config.get("vision_block_reply", "图片未通过审核，已停止发送。"))
+            reason = "视觉审核未提供具体原因。"
         return allow, reason
 
     def _parse_review_json(self, content: str) -> dict:

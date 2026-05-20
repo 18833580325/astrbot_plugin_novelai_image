@@ -131,7 +131,8 @@
   "vision_block_reply": {
     "description": "视觉审核拦截回复",
     "type": "string",
-    "default": "图片未通过审核，已停止发送。"
+    "hint": "发送到群里或私聊里的简短提示；具体拦截原因只会写入后台日志。",
+    "default": "您生成的内容被拦截。"
   },
   "vision_review_prompt": {
     "description": "视觉审核提示词",
