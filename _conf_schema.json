@@ -86,22 +86,29 @@
     "hint": "开启后，图片会先发给有视觉能力的大模型审核，通过后才发送到聊天。",
     "default": false
   },
+  "vision_review_mode": {
+    "description": "视觉审核模型来源",
+    "type": "string",
+    "options": ["astrbot_caption", "astrbot_current", "custom_openai", "off"],
+    "hint": "astrbot_caption 使用 AstrBot 的图片描述模型；astrbot_current 使用当前会话模型；custom_openai 使用下面单独填写的 OpenAI 兼容接口。",
+    "default": "astrbot_caption"
+  },
   "vision_base_url": {
     "description": "视觉审核接口",
     "type": "string",
-    "hint": "填写 OpenAI 兼容的 chat/completions 地址，例如 https://api.openai.com/v1/chat/completions 或你的中转地址。",
+    "hint": "仅 custom_openai 模式需要填写。填写 OpenAI 兼容的 chat/completions 地址，例如 https://api.openai.com/v1/chat/completions 或你的中转地址。",
     "default": ""
   },
   "vision_api_key": {
     "description": "视觉审核 API Key",
     "type": "string",
-    "hint": "不需要 Bearer 前缀。",
+    "hint": "仅 custom_openai 模式需要填写，不需要 Bearer 前缀。",
     "default": ""
   },
   "vision_model": {
     "description": "视觉审核模型",
     "type": "string",
-    "hint": "填写支持图片输入的模型，例如 gpt-4o、gpt-4.1、gemini 等中转支持的模型名。",
+    "hint": "仅 custom_openai 模式需要填写。填写支持图片输入的模型，例如 gpt-4o、gpt-4.1、gemini 等中转支持的模型名。",
     "default": ""
   },
   "vision_proxy_url": {

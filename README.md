@@ -61,7 +61,7 @@ https://image.novelai.net/ai/generate-image
 
 ## 视觉审核
 
-开启 `vision_review_enabled` 后，插件会把生成后的图片作为 `image_url` 发给 OpenAI 兼容的视觉模型接口。模型必须只返回 JSON：
+开启 `vision_review_enabled` 后，插件会先把生成后的图片交给视觉模型审核。模型必须只返回 JSON：
 
 ```json
 {"allow": true, "reason": ""}
@@ -69,8 +69,14 @@ https://image.novelai.net/ai/generate-image
 
 常用配置项：
 
-- `vision_base_url`: OpenAI 兼容 `chat/completions` 地址
-- `vision_api_key`: 视觉模型 API Key
-- `vision_model`: 支持图片输入的模型名
+- `vision_review_mode`: 审核模型来源
+  - `astrbot_caption`: 使用 AstrBot 的图片描述模型，推荐
+  - `astrbot_current`: 使用当前会话大模型，前提是它支持图片输入
+  - `custom_openai`: 使用插件中单独填写的 OpenAI 兼容视觉接口
+  - `off`: 不审核
+- `vision_base_url`: 仅 `custom_openai` 需要，OpenAI 兼容 `chat/completions` 地址
+- `vision_api_key`: 仅 `custom_openai` 需要，视觉模型 API Key
+- `vision_model`: 仅 `custom_openai` 需要，支持图片输入的模型名
 - `vision_review_fail_closed`: 审核接口失败时是否禁止发送
 
+如果使用 `astrbot_caption`，请先在 AstrBot 中配置 `provider_settings.default_image_caption_provider_id` 对应的视觉模型。

@@ -7,11 +7,13 @@ import shlex
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.core.agent.message import ImageURLPart, TextPart, UserMessageSegment
 
 
 RATIO_TABLE = {
@@ -61,6 +63,7 @@ class NovelAIImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
 
     @filter.command("nai", alias={"novelai", "nai画图", "nai生图"})
     async def generate(self, event: AstrMessageEvent):
@@ -374,6 +377,86 @@ class NovelAIImagePlugin(Star):
         if not bool(self.config.get("vision_review_enabled", False)):
             return True, ""
 
+        mode = str(self.config.get("vision_review_mode", "astrbot_caption")).strip() or "astrbot_caption"
+        if mode == "off":
+            return True, ""
+
+        if mode in {"astrbot_caption", "astrbot_current"}:
+            return await self._review_image_with_astrbot_provider(image_bytes, request, mode)
+
+        if mode != "custom_openai":
+            raise RuntimeError(f"未知视觉审核模式：{mode}")
+
+        return await self._review_image_with_custom_openai(image_bytes, request)
+
+    async def _review_image_with_astrbot_provider(
+        self, image_bytes: bytes, request: NovelAIRequest, mode: str
+    ) -> tuple[bool, str]:
+        image_data_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+        provider_id = await self._get_astrbot_review_provider_id(mode)
+        if not provider_id:
+            raise RuntimeError(
+                "没有找到可用的 AstrBot 视觉审核 Provider。"
+                "请先在 AstrBot 里配置图片描述模型，或改用 custom_openai。"
+            )
+
+        user_msg = UserMessageSegment(
+            content=[
+                TextPart(text=self._build_review_prompt(request)),
+                ImageURLPart(image_url=ImageURLPart.ImageURL(url=image_data_url)),
+            ]
+        )
+        llm_resp = await self.context.llm_generate(
+            chat_provider_id=provider_id,
+            contexts=[user_msg],
+        )
+        content = getattr(llm_resp, "completion_text", "") or ""
+        review = self._parse_review_json(content)
+        return self._review_result_to_tuple(review)
+
+    async def _get_astrbot_review_provider_id(self, mode: str) -> str:
+        if mode == "astrbot_current":
+            provider_id = await self.context.get_current_chat_provider_id()
+            return str(provider_id or "").strip()
+
+        config = self._load_astrbot_config()
+        provider_settings = config.get("provider_settings", {}) if isinstance(config, dict) else {}
+        provider_id = provider_settings.get("default_image_caption_provider_id", "")
+        if provider_id:
+            return str(provider_id).strip()
+
+        provider_id = await self.context.get_current_chat_provider_id()
+        return str(provider_id or "").strip()
+
+    def _load_astrbot_config(self) -> dict:
+        try:
+            with open(self._astrbot_config_file, "r", encoding="utf-8-sig") as file:
+                data = json.load(file)
+            return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except Exception as exc:
+            logger.warning(f"Failed to load AstrBot config: {exc}")
+            return {}
+
+    def _build_review_prompt(self, request: NovelAIRequest) -> str:
+        review_prompt = str(self.config.get("vision_review_prompt", "")).strip()
+        if not review_prompt:
+            review_prompt = (
+                "你是图片发送前的审核器。请判断图片是否适合发送到聊天群。"
+                "重点拦截：未成年人或疑似未成年色情、真实人物色情、血腥暴力、违法内容、明显仇恨或极端内容。"
+                "如果只是成人二次元性感内容，且没有未成年特征，可以允许。"
+                "只返回 JSON，不要返回 Markdown。格式：{\"allow\": true, \"reason\": \"\"}。"
+            )
+        return (
+            f"{review_prompt}\n\n"
+            "原始提示词如下，仅作为辅助判断，不要根据提示词臆测图片不存在的内容：\n"
+            f"{request.prompt}"
+        )
+
+    async def _review_image_with_custom_openai(
+        self, image_bytes: bytes, request: NovelAIRequest
+    ) -> tuple[bool, str]:
         api_key = self._clean_api_key(str(self.config.get("vision_api_key", "")).strip())
         if not api_key:
             raise RuntimeError("已启用视觉审核，但 vision_api_key 为空。")
@@ -386,15 +469,6 @@ class NovelAIImagePlugin(Star):
         if not model:
             raise RuntimeError("已启用视觉审核，但 vision_model 为空。")
 
-        review_prompt = str(self.config.get("vision_review_prompt", "")).strip()
-        if not review_prompt:
-            review_prompt = (
-                "你是图片发送前的审核器。请判断图片是否适合发送到聊天群。"
-                "重点拦截：未成年人或疑似未成年色情、真实人物色情、血腥暴力、违法内容、明显仇恨或极端内容。"
-                "如果只是成人二次元性感内容，且没有未成年特征，可以允许。"
-                "只返回 JSON，不要返回 Markdown。格式：{\"allow\": true, \"reason\": \"\"}。"
-            )
-
         image_data_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
         payload = {
             "model": model,
@@ -402,14 +476,7 @@ class NovelAIImagePlugin(Star):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": review_prompt},
-                        {
-                            "type": "text",
-                            "text": (
-                                "原始提示词如下，仅作为辅助判断，不要根据提示词臆测图片不存在的内容：\n"
-                                f"{request.prompt}"
-                            ),
-                        },
+                        {"type": "text", "text": self._build_review_prompt(request)},
                         {"type": "image_url", "image_url": {"url": image_data_url}},
                     ],
                 }
@@ -436,6 +503,9 @@ class NovelAIImagePlugin(Star):
 
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         review = self._parse_review_json(content)
+        return self._review_result_to_tuple(review)
+
+    def _review_result_to_tuple(self, review: dict) -> tuple[bool, str]:
         allow = bool(review.get("allow", False))
         reason = str(review.get("reason", "")).strip()
         if not allow and not reason:
