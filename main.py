@@ -68,6 +68,8 @@ class NovelAIImagePlugin(Star):
         self.config = config
         self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
         self._output_dir = Path("/AstrBot/data/plugin_data/novelai_image/outputs")
+        self._generation_lock = asyncio.Lock()
+        self._queue_waiting = 0
 
     @filter.command("nai", alias={"novelai", "nai画图", "nai生图"})
     async def generate(self, event: AstrMessageEvent):
@@ -84,7 +86,7 @@ class NovelAIImagePlugin(Star):
 
         if request.llm_optimize:
             try:
-                optimized_prompt = await self._optimize_prompt_with_llm(request.prompt)
+                optimized_prompt = await self._optimize_prompt_with_llm(request.prompt, event)
                 if optimized_prompt:
                     logger.info(
                         "NovelAI prompt optimized by LLM. original=%s optimized=%s",
@@ -97,35 +99,45 @@ class NovelAIImagePlugin(Star):
                 yield event.plain_result(f"提示词优化失败：{exc}")
                 return
 
-        yield event.plain_result(
-            f"已收到，正在用 NovelAI 生成图片：{request.width}x{request.height}，"
-            f"steps={request.steps}，scale={request.scale}"
-        )
+        queue_position = self._queue_waiting + (1 if self._generation_lock.locked() else 0)
+        self._queue_waiting += 1
+        if queue_position > 0:
+            yield event.plain_result(f"已加入 NovelAI 画图队列，前面还有 {queue_position} 个任务。")
 
-        try:
-            image_bytes = await self._call_novelai(api_key, request)
-        except Exception as exc:
-            logger.error(f"NovelAI image generation failed: {exc}")
-            yield event.plain_result(f"生成失败：{exc}")
-            return
+        async with self._generation_lock:
+            self._queue_waiting = max(0, self._queue_waiting - 1)
+            if queue_position > 0:
+                yield event.plain_result("轮到你了，开始生成 NovelAI 图片。")
+            else:
+                yield event.plain_result(
+                    f"已收到，正在用 NovelAI 生成图片：{request.width}x{request.height}，"
+                    f"steps={request.steps}，scale={request.scale}"
+                )
 
-        try:
-            allowed, reason = await self._review_image(image_bytes, request)
-        except Exception as exc:
-            logger.error(f"NovelAI image review failed: {exc}")
-            if bool(self.config.get("vision_review_fail_closed", False)):
-                yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+            try:
+                image_bytes = await self._call_novelai(api_key, request)
+            except Exception as exc:
+                logger.error(f"NovelAI image generation failed: {exc}")
+                yield event.plain_result(f"生成失败：{exc}")
                 return
-            allowed, reason = True, ""
 
-        if not allowed:
-            if reason:
-                logger.warning(f"NovelAI image blocked by vision review: {reason}")
-            yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
-            return
+            try:
+                allowed, reason = await self._review_image(image_bytes, request, event)
+            except Exception as exc:
+                logger.error(f"NovelAI image review failed: {exc}")
+                if bool(self.config.get("vision_review_fail_closed", False)):
+                    yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+                    return
+                allowed, reason = True, ""
 
-        image_path = self._save_image(image_bytes, request)
-        yield event.image_result(str(image_path))
+            if not allowed:
+                if reason:
+                    logger.warning(f"NovelAI image blocked by vision review: {reason}")
+                yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
+                return
+
+            image_path = self._save_image(image_bytes, request)
+            yield event.image_result(str(image_path))
 
     @filter.command("nai_help", alias={"novelai_help", "nai帮助"})
     async def help(self, event: AstrMessageEvent):
@@ -238,8 +250,8 @@ class NovelAIImagePlugin(Star):
             llm_optimize=llm_optimize,
         )
 
-    async def _optimize_prompt_with_llm(self, prompt: str) -> str:
-        provider_id = await self.context.get_current_chat_provider_id()
+    async def _optimize_prompt_with_llm(self, prompt: str, event: AstrMessageEvent) -> str:
+        provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
         if not provider_id:
             raise RuntimeError("当前会话没有可用的大模型 Provider。")
 
@@ -443,7 +455,9 @@ class NovelAIImagePlugin(Star):
         except Exception as exc:
             raise RuntimeError(f"响应不是 PNG，也无法按 ZIP 解压：{exc}") from exc
 
-    async def _review_image(self, image_bytes: bytes, request: NovelAIRequest) -> tuple[bool, str]:
+    async def _review_image(
+        self, image_bytes: bytes, request: NovelAIRequest, event: AstrMessageEvent
+    ) -> tuple[bool, str]:
         if not bool(self.config.get("vision_review_enabled", False)):
             return True, ""
 
@@ -452,7 +466,7 @@ class NovelAIImagePlugin(Star):
             return True, ""
 
         if mode in {"astrbot_caption", "astrbot_current"}:
-            return await self._review_image_with_astrbot_provider(image_bytes, request, mode)
+            return await self._review_image_with_astrbot_provider(image_bytes, request, event, mode)
 
         if mode != "custom_openai":
             raise RuntimeError(f"未知视觉审核模式：{mode}")
@@ -460,10 +474,10 @@ class NovelAIImagePlugin(Star):
         return await self._review_image_with_custom_openai(image_bytes, request)
 
     async def _review_image_with_astrbot_provider(
-        self, image_bytes: bytes, request: NovelAIRequest, mode: str
+        self, image_bytes: bytes, request: NovelAIRequest, event: AstrMessageEvent, mode: str
     ) -> tuple[bool, str]:
         image_data_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
-        provider_id = await self._get_astrbot_review_provider_id(mode)
+        provider_id = await self._get_astrbot_review_provider_id(mode, event)
         if not provider_id:
             raise RuntimeError(
                 "没有找到可用的 AstrBot 视觉审核 Provider。"
@@ -484,9 +498,9 @@ class NovelAIImagePlugin(Star):
         review = self._parse_review_json(content)
         return self._review_result_to_tuple(review)
 
-    async def _get_astrbot_review_provider_id(self, mode: str) -> str:
+    async def _get_astrbot_review_provider_id(self, mode: str, event: AstrMessageEvent) -> str:
         if mode == "astrbot_current":
-            provider_id = await self.context.get_current_chat_provider_id()
+            provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
             return str(provider_id or "").strip()
 
         config = self._load_astrbot_config()
@@ -495,8 +509,11 @@ class NovelAIImagePlugin(Star):
         if provider_id:
             return str(provider_id).strip()
 
-        provider_id = await self.context.get_current_chat_provider_id()
+        provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
         return str(provider_id or "").strip()
+
+    def _event_umo(self, event: AstrMessageEvent) -> str:
+        return str(getattr(event.message_obj, "unified_msg_origin", "") or "")
 
     def _load_astrbot_config(self) -> dict:
         try:

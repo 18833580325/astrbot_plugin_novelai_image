@@ -9,6 +9,7 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 - 兼容 JSON 和 SSE wrapper 响应。
 - 支持模型、比例、尺寸、步数、scale、seed、sampler、负面提示词。
 - 可选：生成后先交给有视觉能力的大模型审核，通过后才发送。
+- 严格单并发队列，同一时间只处理 1 个 NovelAI 生成任务。
 - 支持 HTTP 代理。
 
 ## 命令
