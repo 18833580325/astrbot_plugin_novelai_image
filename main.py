@@ -160,7 +160,8 @@ class NovelAIImagePlugin(Star):
             if not allowed:
                 if reason:
                     logger.warning(f"NovelAI image blocked by vision review: {reason}")
-                yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
+                block_reply = str(self.config.get("vision_block_reply", "您生成的内容被拦截。"))
+                yield self._mention_sender_result(event, block_reply)
                 return
 
             image_path = self._save_image(image_bytes, request)
@@ -395,6 +396,21 @@ class NovelAIImagePlugin(Star):
         if isinstance(value, str):
             value = value.replace("\n", ",").split(",")
         return [str(item).strip() for item in value if str(item).strip()]
+
+    def _mention_sender_result(self, event: AstrMessageEvent, text: str):
+        if not self._is_group_event(event):
+            return event.plain_result(text)
+        try:
+            import astrbot.api.message_components as Comp
+
+            return event.chain_result([Comp.At(qq=event.get_sender_id()), Comp.Plain(f" {text}")])
+        except Exception as exc:
+            logger.warning(f"Failed to build at-message result, fallback to plain text: {exc}")
+            return event.plain_result(f"@{event.get_sender_id()} {text}")
+
+    def _is_group_event(self, event: AstrMessageEvent) -> bool:
+        message_obj = getattr(event, "message_obj", None)
+        return bool(getattr(message_obj, "group_id", ""))
 
     def _apply_prompt_presets(self, request: NovelAIRequest) -> str:
         parts = [request.prompt.strip()]
