@@ -4,8 +4,10 @@ import json
 import random
 import re
 import shlex
+import struct
 import time
 import zipfile
+import zlib
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -46,6 +48,9 @@ class NovelAIRequest:
     prompt: str
     original_prompt: str
     negative_prompt: str
+    style_name: str
+    use_quality_prompt: bool
+    use_style_prompt: bool
     model: str
     width: int
     height: int
@@ -98,6 +103,18 @@ class NovelAIImagePlugin(Star):
                 logger.error(f"NovelAI prompt optimization failed: {exc}")
                 yield event.plain_result(f"提示词优化失败：{exc}")
                 return
+
+        try:
+            request.prompt = self._apply_prompt_presets(request)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
+        logger.info(
+            "NovelAI final prompt prepared. style=%s quality=%s prompt=%s",
+            request.style_name,
+            request.use_quality_prompt,
+            request.prompt,
+        )
 
         queue_position = self._queue_waiting + (1 if self._generation_lock.locked() else 0)
         self._queue_waiting += 1
@@ -157,14 +174,20 @@ class NovelAIImagePlugin(Star):
                     "/nai --seed 123456789 提示词",
                     "/nai --sampler k_euler_ancestral 提示词",
                     "/nai --model v45 提示词",
+                    "/nai --style cinematic 提示词",
                     "/nai --uc lowres, bad anatomy 提示词",
                     "/nai -llm 中文提示词",
+                    "/nai --no-style 提示词",
+                    "/nai --no-quality 提示词",
                     "",
                     "支持比例：1:1、2:3、3:2、3:5、5:3、9:16、16:9、4:3、3:4",
                     "模型简写：v45、v45-curated、v4、v4-curated、v3、furry",
+                    f"当前默认画风：{self._default_style_name()}",
+                    f"可用画风：{', '.join(self._style_presets().keys()) or '无'}",
                     "",
                     "例子：",
                     "/nai --ratio 2:3 --steps 28 --scale 5.5 1girl, white hair, red eyes, best quality",
+                    "/nai --style watercolor 白发红瞳少女，海边",
                 ]
             )
         )
@@ -188,6 +211,9 @@ class NovelAIImagePlugin(Star):
         seed = int(self.config.get("seed", -1))
         sampler = str(self.config.get("sampler", "k_euler_ancestral")).strip() or "k_euler_ancestral"
         negative_prompt = str(self.config.get("negative_prompt", "")).strip()
+        style_name = self._default_style_name()
+        use_quality_prompt = True
+        use_style_prompt = True
         llm_optimize = False
 
         index = 0
@@ -205,6 +231,9 @@ class NovelAIImagePlugin(Star):
             elif token == "--model":
                 index += 1
                 model = self._normalize_model(self._need_value(parts, index, token))
+            elif token in {"--style", "-s", "--画风"}:
+                index += 1
+                style_name = self._need_value(parts, index, token)
             elif token == "--steps":
                 index += 1
                 steps = int(self._need_value(parts, index, token))
@@ -222,6 +251,10 @@ class NovelAIImagePlugin(Star):
                 negative_prompt = self._need_value(parts, index, token)
             elif token in {"-llm", "--llm", "--optimize", "--优化"}:
                 llm_optimize = True
+            elif token in {"--no-quality", "--noquality", "--不要质量词"}:
+                use_quality_prompt = False
+            elif token in {"--no-style", "--nostyle", "--不要画风"}:
+                use_style_prompt = False
             else:
                 prompt_parts.append(token)
             index += 1
@@ -240,6 +273,9 @@ class NovelAIImagePlugin(Star):
             prompt=prompt,
             original_prompt=prompt,
             negative_prompt=negative_prompt,
+            style_name=style_name,
+            use_quality_prompt=use_quality_prompt,
+            use_style_prompt=use_style_prompt,
             model=self._normalize_model(model),
             width=width,
             height=height,
@@ -249,6 +285,57 @@ class NovelAIImagePlugin(Star):
             sampler=sampler,
             llm_optimize=llm_optimize,
         )
+
+    def _apply_prompt_presets(self, request: NovelAIRequest) -> str:
+        parts = [request.prompt.strip()]
+        if request.use_quality_prompt:
+            quality_prompt = str(self.config.get("quality_prompt", "")).strip()
+            if quality_prompt:
+                parts.append(quality_prompt)
+
+        style_name = request.style_name.strip()
+        if request.use_style_prompt and style_name and style_name.lower() not in {"none", "off", "无"}:
+            styles = self._style_presets()
+            style_prompt = styles.get(style_name)
+            if style_prompt is None:
+                available = ", ".join(styles.keys()) or "无"
+                raise ValueError(f"未知画风：{style_name}。可用画风：{available}")
+            if style_prompt.strip():
+                parts.append(style_prompt.strip())
+        return self._join_prompt_parts(parts)
+
+    def _join_prompt_parts(self, parts: list[str]) -> str:
+        cleaned = [part.strip().strip(",") for part in parts if str(part).strip().strip(",")]
+        return ", ".join(cleaned)
+
+    def _default_style_name(self) -> str:
+        return str(self.config.get("default_style", "none")).strip() or "none"
+
+    def _style_presets(self) -> dict[str, str]:
+        raw = self.config.get("style_presets", "")
+        if isinstance(raw, dict):
+            return {str(key).strip(): str(value).strip() for key, value in raw.items() if str(key).strip()}
+        if isinstance(raw, list):
+            presets = {}
+            for item in raw:
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip()
+                    prompt = str(item.get("prompt", "")).strip()
+                    if name:
+                        presets[name] = prompt
+            return presets
+        text = str(raw).strip()
+        if not text:
+            return {}
+        try:
+            data = json.loads(text)
+        except Exception as exc:
+            logger.warning(f"Failed to parse style_presets JSON: {exc}")
+            return {}
+        if not isinstance(data, dict):
+            logger.warning("style_presets must be a JSON object.")
+            return {}
+        return {str(key).strip(): str(value).strip() for key, value in data.items() if str(key).strip()}
 
     async def _optimize_prompt_with_llm(self, prompt: str, event: AstrMessageEvent) -> str:
         provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
@@ -617,10 +704,60 @@ class NovelAIImagePlugin(Star):
 
     def _save_image(self, image_bytes: bytes, request: NovelAIRequest) -> Path:
         self._output_dir.mkdir(parents=True, exist_ok=True)
+        image_bytes = self._replace_png_metadata(image_bytes)
         filename = f"nai_{int(time.time())}_{request.seed}.png"
         path = self._output_dir / filename
         path.write_bytes(image_bytes)
         return path
+
+    def _replace_png_metadata(self, image_bytes: bytes) -> bytes:
+        if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return image_bytes
+
+        signature = image_bytes[:8]
+        offset = 8
+        chunks: list[tuple[bytes, bytes]] = []
+        inserted = False
+        text_chunk = self._png_chunk(
+            b"iTXt",
+            b"Description\x00\x00\x00\x00\x00" + "generated by 白毛红瞳魔法师".encode("utf-8"),
+        )
+
+        while offset + 8 <= len(image_bytes):
+            length = struct.unpack(">I", image_bytes[offset : offset + 4])[0]
+            chunk_type = image_bytes[offset + 4 : offset + 8]
+            data_start = offset + 8
+            data_end = data_start + length
+            crc_end = data_end + 4
+            if crc_end > len(image_bytes):
+                return image_bytes
+
+            data = image_bytes[data_start:data_end]
+            offset = crc_end
+
+            if chunk_type in {b"tEXt", b"zTXt", b"iTXt"}:
+                continue
+
+            if chunk_type == b"IEND" and not inserted:
+                chunks.append((b"__RAW__", text_chunk))
+                inserted = True
+
+            chunks.append((chunk_type, data))
+            if chunk_type == b"IEND":
+                break
+
+        output = bytearray(signature)
+        for chunk_type, data in chunks:
+            if chunk_type == b"__RAW__":
+                output.extend(data)
+            else:
+                output.extend(self._png_chunk(chunk_type, data))
+        return bytes(output)
+
+    def _png_chunk(self, chunk_type: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(chunk_type)
+        crc = zlib.crc32(data, crc) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", crc)
 
     def _clean_api_key(self, api_key: str) -> str:
         return api_key.removeprefix("Bearer ").strip()

@@ -80,6 +80,24 @@
     "type": "int",
     "default": 180
   },
+  "quality_prompt": {
+    "description": "预设质量词",
+    "type": "string",
+    "hint": "每次生成默认追加到 prompt 后面。命令里使用 --no-quality 可临时关闭。",
+    "default": "best quality, amazing quality, very aesthetic, absurdres"
+  },
+  "default_style": {
+    "description": "默认画风名称",
+    "type": "string",
+    "hint": "填写 style_presets 里的名称；none/off/无 表示默认不追加画风。",
+    "default": "none"
+  },
+  "style_presets": {
+    "description": "画风预设 JSON",
+    "type": "string",
+    "hint": "只允许管理员在这里维护。用户只能用 --style 名称 切换，不能在聊天里增删。格式是 JSON 对象。",
+    "default": "{\"cinematic\":\"cinematic lighting, dramatic composition, depth of field, detailed background\",\"watercolor\":\"watercolor illustration, soft colors, delicate brushwork, dreamy atmosphere\",\"anime\":\"anime style, clean lineart, vibrant colors, detailed eyes\",\"realistic\":\"semi-realistic anime, realistic lighting, detailed skin texture, high detail\"}"
+  },
   "llm_prompt_optimizer_prompt": {
     "description": "LLM 提示词优化指令",
     "type": "string",
