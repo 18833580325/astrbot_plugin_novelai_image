@@ -9,8 +9,10 @@ import time
 import zipfile
 import zlib
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
@@ -73,6 +75,8 @@ class NovelAIImagePlugin(Star):
         self.config = config
         self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
         self._output_dir = Path("/AstrBot/data/plugin_data/novelai_image/outputs")
+        self._quota_file = Path("/AstrBot/data/plugin_data/novelai_image/quota_usage.json")
+        self._quota_usage = self._load_quota_usage()
         self._generation_lock = asyncio.Lock()
         self._queue_waiting = 0
 
@@ -81,6 +85,12 @@ class NovelAIImagePlugin(Star):
         api_key = self._clean_api_key(str(self.config.get("api_key", "")).strip())
         if not api_key:
             yield event.plain_result("NovelAI API Key 还没配置，请先在插件配置里填写 api_key。")
+            return
+
+        sender_id = str(event.get_sender_id())
+        policy_error = self._check_usage_policy(sender_id)
+        if policy_error:
+            yield event.plain_result(policy_error)
             return
 
         try:
@@ -154,6 +164,7 @@ class NovelAIImagePlugin(Star):
                 return
 
             image_path = self._save_image(image_bytes, request)
+            self._record_quota_usage(sender_id)
             yield event.image_result(str(image_path))
 
     @filter.command("nai_help", alias={"novelai_help", "nai帮助"})
@@ -285,6 +296,105 @@ class NovelAIImagePlugin(Star):
             sampler=sampler,
             llm_optimize=llm_optimize,
         )
+
+    def _check_usage_policy(self, sender_id: str) -> str | None:
+        if sender_id in self._string_list("blacklist_user_ids"):
+            return str(self.config.get("blacklist_reply", "你已被加入 NovelAI 画图黑名单，无法使用该功能。"))
+
+        if self._is_quota_exempt(sender_id):
+            return None
+
+        disabled_reason = self._disabled_time_reason()
+        if disabled_reason:
+            return disabled_reason
+
+        daily_limit = int(self.config.get("daily_quota_limit", 10))
+        if daily_limit > 0 and self._quota_used_today(sender_id) >= daily_limit:
+            return str(
+                self.config.get(
+                    "quota_exceeded_reply",
+                    f"你今天的 NovelAI 画图额度已用完（{daily_limit} 张/天），明天再来吧。",
+                )
+            )
+        return None
+
+    def _is_quota_exempt(self, sender_id: str) -> bool:
+        return sender_id in self._string_list("allowed_user_ids")
+
+    def _disabled_time_reason(self) -> str | None:
+        if not bool(self.config.get("time_limit_enabled", True)):
+            return None
+        start = str(self.config.get("disabled_start_time", "23:00")).strip()
+        end = str(self.config.get("disabled_end_time", "08:00")).strip()
+        start_time = self._parse_hhmm(start)
+        end_time = self._parse_hhmm(end)
+        if not start_time or not end_time:
+            return None
+
+        now = datetime.now(self._local_timezone()).time()
+        if start_time <= end_time:
+            disabled = start_time <= now < end_time
+        else:
+            disabled = now >= start_time or now < end_time
+        if not disabled:
+            return None
+        return str(self.config.get("time_limit_reply", f"NovelAI 画图功能在 {start}-{end} 暂停使用，请稍后再试。"))
+
+    def _parse_hhmm(self, value: str):
+        try:
+            return datetime.strptime(value.strip(), "%H:%M").time()
+        except ValueError:
+            logger.warning(f"Invalid NovelAI time config: {value}")
+            return None
+
+    def _local_timezone(self) -> ZoneInfo:
+        timezone_name = str(self.config.get("timezone", "Asia/Shanghai")).strip() or "Asia/Shanghai"
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            logger.warning(f"Invalid NovelAI timezone config: {timezone_name}, fallback to Asia/Shanghai")
+            return ZoneInfo("Asia/Shanghai")
+
+    def _quota_key(self) -> str:
+        return datetime.now(self._local_timezone()).strftime("%Y-%m-%d")
+
+    def _quota_used_today(self, sender_id: str) -> int:
+        return int(self._quota_usage.get(self._quota_key(), {}).get(sender_id, 0))
+
+    def _record_quota_usage(self, sender_id: str):
+        if self._is_quota_exempt(sender_id):
+            return
+        day = self._quota_key()
+        self._quota_usage.setdefault(day, {})
+        self._quota_usage[day][sender_id] = int(self._quota_usage[day].get(sender_id, 0)) + 1
+        for key in list(self._quota_usage.keys()):
+            if key != day:
+                self._quota_usage.pop(key, None)
+        self._save_quota_usage()
+
+    def _load_quota_usage(self) -> dict:
+        try:
+            if self._quota_file.exists():
+                with open(self._quota_file, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+                return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(f"Failed to load NovelAI quota usage: {exc}")
+        return {}
+
+    def _save_quota_usage(self):
+        try:
+            self._quota_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._quota_file, "w", encoding="utf-8") as file:
+                json.dump(self._quota_usage, file, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"Failed to save NovelAI quota usage: {exc}")
+
+    def _string_list(self, key: str) -> list[str]:
+        value = self.config.get(key, [])
+        if isinstance(value, str):
+            value = value.replace("\n", ",").split(",")
+        return [str(item).strip() for item in value if str(item).strip()]
 
     def _apply_prompt_presets(self, request: NovelAIRequest) -> str:
         parts = [request.prompt.strip()]

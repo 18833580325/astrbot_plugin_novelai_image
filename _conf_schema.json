@@ -98,6 +98,62 @@
     "hint": "只允许管理员在这里维护。用户只能用 --style 名称 切换，不能在聊天里增删。格式是 JSON 对象。",
     "default": "{\"cinematic\":\"cinematic lighting, dramatic composition, depth of field, detailed background\",\"watercolor\":\"watercolor illustration, soft colors, delicate brushwork, dreamy atmosphere\",\"anime\":\"anime style, clean lineart, vibrant colors, detailed eyes\",\"realistic\":\"semi-realistic anime, realistic lighting, detailed skin texture, high detail\"}"
   },
+  "timezone": {
+    "description": "时间判断时区",
+    "type": "string",
+    "hint": "用于禁用时间段和每日额度重置。中国大陆建议保持 Asia/Shanghai。",
+    "default": "Asia/Shanghai"
+  },
+  "time_limit_enabled": {
+    "description": "启用禁用时间段",
+    "type": "bool",
+    "default": true
+  },
+  "disabled_start_time": {
+    "description": "禁用开始时间",
+    "type": "string",
+    "hint": "24 小时制 HH:MM，支持跨天时间段。",
+    "default": "23:00"
+  },
+  "disabled_end_time": {
+    "description": "禁用结束时间",
+    "type": "string",
+    "hint": "24 小时制 HH:MM，支持跨天时间段。",
+    "default": "08:00"
+  },
+  "time_limit_reply": {
+    "description": "禁用时间段回复",
+    "type": "string",
+    "default": "NovelAI 画图功能在 23:00-08:00 暂停使用，请稍后再试。"
+  },
+  "daily_quota_limit": {
+    "description": "每日生成额度",
+    "type": "int",
+    "hint": "普通用户每天成功生成的图片数量。0 表示不限制；白名单用户不受限制。",
+    "default": 10
+  },
+  "quota_exceeded_reply": {
+    "description": "额度用完回复",
+    "type": "string",
+    "default": "你今天的 NovelAI 画图额度已用完（10 张/天），明天再来吧。"
+  },
+  "allowed_user_ids": {
+    "description": "白名单用户 QQ 号",
+    "type": "list",
+    "hint": "白名单用户不受禁用时间段和每日额度限制。填写字符串 QQ 号，例如 [\"123456\"]。",
+    "default": []
+  },
+  "blacklist_user_ids": {
+    "description": "黑名单用户 QQ 号",
+    "type": "list",
+    "hint": "黑名单用户不能使用 NovelAI 画图功能，优先级高于白名单。",
+    "default": []
+  },
+  "blacklist_reply": {
+    "description": "黑名单回复",
+    "type": "string",
+    "default": "你已被加入 NovelAI 画图黑名单，无法使用该功能。"
+  },
   "llm_prompt_optimizer_prompt": {
     "description": "LLM 提示词优化指令",
     "type": "string",
