@@ -167,7 +167,7 @@ class NovelAIImagePlugin(Star):
 
             image_path = self._save_image(image_bytes, request)
             self._record_quota_usage(sender_id)
-            yield event.image_result(str(image_path))
+            yield self._image_with_sender_result(event, str(image_path))
 
     @filter.command("nai_help", alias={"novelai_help", "nai帮助"})
     async def help(self, event: AstrMessageEvent):
@@ -408,6 +408,17 @@ class NovelAIImagePlugin(Star):
         except Exception as exc:
             logger.warning(f"Failed to build at-message result, fallback to plain text: {exc}")
             return event.plain_result(f"@{event.get_sender_id()} {text}")
+
+    def _image_with_sender_result(self, event: AstrMessageEvent, image_path: str):
+        if not self._is_group_event(event):
+            return event.image_result(image_path)
+        try:
+            import astrbot.api.message_components as Comp
+
+            return event.chain_result([Comp.At(qq=event.get_sender_id()), Comp.Image(file=image_path)])
+        except Exception as exc:
+            logger.warning(f"Failed to build at-image result, fallback to image only: {exc}")
+            return event.image_result(image_path)
 
     def _is_group_event(self, event: AstrMessageEvent) -> bool:
         message_obj = getattr(event, "message_obj", None)
