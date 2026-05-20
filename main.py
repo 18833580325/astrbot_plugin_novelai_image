@@ -404,6 +404,9 @@ class NovelAIImagePlugin(Star):
         try:
             import astrbot.api.message_components as Comp
 
+            reply = self._reply_component(event, Comp)
+            if reply:
+                return event.chain_result([reply, Comp.Plain(text)])
             return event.chain_result([Comp.At(qq=event.get_sender_id()), Comp.Plain(f" {text}")])
         except Exception as exc:
             logger.warning(f"Failed to build at-message result, fallback to plain text: {exc}")
@@ -415,10 +418,30 @@ class NovelAIImagePlugin(Star):
         try:
             import astrbot.api.message_components as Comp
 
+            reply = self._reply_component(event, Comp)
+            if reply:
+                return event.chain_result([reply, Comp.Image(file=image_path)])
             return event.chain_result([Comp.At(qq=event.get_sender_id()), Comp.Image(file=image_path)])
         except Exception as exc:
             logger.warning(f"Failed to build at-image result, fallback to image only: {exc}")
             return event.image_result(image_path)
+
+    def _reply_component(self, event: AstrMessageEvent, components_module):
+        message_obj = getattr(event, "message_obj", None)
+        message_id = str(getattr(message_obj, "message_id", "")).strip()
+        if not message_id:
+            return None
+        constructors = (
+            lambda: components_module.Reply(message_id=message_id),
+            lambda: components_module.Reply(id=message_id),
+            lambda: components_module.Reply(message_id),
+        )
+        for constructor in constructors:
+            try:
+                return constructor()
+            except Exception:
+                continue
+        return None
 
     def _is_group_event(self, event: AstrMessageEvent) -> bool:
         message_obj = getattr(event, "message_obj", None)
