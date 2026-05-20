@@ -80,6 +80,12 @@
     "type": "int",
     "default": 180
   },
+  "llm_prompt_optimizer_prompt": {
+    "description": "LLM 提示词优化指令",
+    "type": "string",
+    "hint": "用户在 /nai 命令中加入 -llm 时，会用当前会话大模型按这段指令优化提示词。",
+    "default": "你是 NovelAI 提示词优化器。把用户输入改写为适合 NovelAI/anime diffusion 的英文提示词。要求：只输出最终英文 prompt，不要 Markdown，不要解释。保留用户的主体、动作、服装、场景、构图和风格要求。如果用户输入中文，请准确翻译并补充常用英文 tag。避免加入用户没有要求的露骨色情、未成年、血腥、政治或违法内容。输出以逗号分隔的 tag/prompt。"
+  },
   "vision_review_enabled": {
     "description": "启用生成后视觉审核",
     "type": "bool",

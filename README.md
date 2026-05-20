@@ -21,6 +21,7 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 /nai --seed 123456789 提示词
 /nai --model v45 提示词
 /nai --uc "lowres, bad anatomy" 提示词
+/nai -llm 中文提示词
 /nai_help
 ```
 
@@ -32,6 +33,16 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 - `v4-curated`: `nai-diffusion-4-curated-preview`
 - `v3`: `nai-diffusion-3`
 - `furry`: `nai-diffusion-furry-3`
+
+## LLM 提示词优化
+
+命令里加入 `-llm` 或 `--llm` 时，插件会先使用当前会话的大模型把用户提示词改写成更适合 NovelAI 的英文 tag/prompt，然后再生图。
+
+```text
+/nai -llm 白发红瞳少女，海边，电影感光照
+```
+
+优化后的 prompt 会写入后台日志，方便排查效果。
 
 ## 比例
 

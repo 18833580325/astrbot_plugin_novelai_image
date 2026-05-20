@@ -44,6 +44,7 @@ MODEL_OPTIONS = {
 @dataclass
 class NovelAIRequest:
     prompt: str
+    original_prompt: str
     negative_prompt: str
     model: str
     width: int
@@ -52,6 +53,7 @@ class NovelAIRequest:
     scale: float
     seed: int
     sampler: str
+    llm_optimize: bool
 
 
 @register(
@@ -79,6 +81,21 @@ class NovelAIImagePlugin(Star):
         except ValueError as exc:
             yield event.plain_result(str(exc))
             return
+
+        if request.llm_optimize:
+            try:
+                optimized_prompt = await self._optimize_prompt_with_llm(request.prompt)
+                if optimized_prompt:
+                    logger.info(
+                        "NovelAI prompt optimized by LLM. original=%s optimized=%s",
+                        request.prompt,
+                        optimized_prompt,
+                    )
+                    request.prompt = optimized_prompt
+            except Exception as exc:
+                logger.error(f"NovelAI prompt optimization failed: {exc}")
+                yield event.plain_result(f"提示词优化失败：{exc}")
+                return
 
         yield event.plain_result(
             f"已收到，正在用 NovelAI 生成图片：{request.width}x{request.height}，"
@@ -129,6 +146,7 @@ class NovelAIImagePlugin(Star):
                     "/nai --sampler k_euler_ancestral 提示词",
                     "/nai --model v45 提示词",
                     "/nai --uc lowres, bad anatomy 提示词",
+                    "/nai -llm 中文提示词",
                     "",
                     "支持比例：1:1、2:3、3:2、3:5、5:3、9:16、16:9、4:3、3:4",
                     "模型简写：v45、v45-curated、v4、v4-curated、v3、furry",
@@ -158,6 +176,7 @@ class NovelAIImagePlugin(Star):
         seed = int(self.config.get("seed", -1))
         sampler = str(self.config.get("sampler", "k_euler_ancestral")).strip() or "k_euler_ancestral"
         negative_prompt = str(self.config.get("negative_prompt", "")).strip()
+        llm_optimize = False
 
         index = 0
         while index < len(parts):
@@ -189,6 +208,8 @@ class NovelAIImagePlugin(Star):
             elif token in {"--uc", "--negative", "--negative-prompt"}:
                 index += 1
                 negative_prompt = self._need_value(parts, index, token)
+            elif token in {"-llm", "--llm", "--optimize", "--优化"}:
+                llm_optimize = True
             else:
                 prompt_parts.append(token)
             index += 1
@@ -205,6 +226,7 @@ class NovelAIImagePlugin(Star):
 
         return NovelAIRequest(
             prompt=prompt,
+            original_prompt=prompt,
             negative_prompt=negative_prompt,
             model=self._normalize_model(model),
             width=width,
@@ -213,7 +235,50 @@ class NovelAIImagePlugin(Star):
             scale=scale,
             seed=seed,
             sampler=sampler,
+            llm_optimize=llm_optimize,
         )
+
+    async def _optimize_prompt_with_llm(self, prompt: str) -> str:
+        provider_id = await self.context.get_current_chat_provider_id()
+        if not provider_id:
+            raise RuntimeError("当前会话没有可用的大模型 Provider。")
+
+        system_prompt = str(self.config.get("llm_prompt_optimizer_prompt", "")).strip()
+        if not system_prompt:
+            system_prompt = (
+                "你是 NovelAI 提示词优化器。把用户输入改写为适合 NovelAI/anime diffusion 的英文提示词。"
+                "要求：只输出最终英文 prompt，不要 Markdown，不要解释。"
+                "保留用户的主体、动作、服装、场景、构图和风格要求。"
+                "如果用户输入中文，请准确翻译并补充常用英文 tag。"
+                "避免加入用户没有要求的露骨色情、未成年、血腥、政治或违法内容。"
+                "输出以逗号分隔的 tag/prompt。"
+            )
+
+        user_msg = UserMessageSegment(
+            content=[
+                TextPart(
+                    text=(
+                        f"{system_prompt}\n\n"
+                        "用户原始提示词：\n"
+                        f"{prompt}"
+                    )
+                )
+            ]
+        )
+        llm_resp = await self.context.llm_generate(
+            chat_provider_id=str(provider_id),
+            contexts=[user_msg],
+        )
+        text = (getattr(llm_resp, "completion_text", "") or "").strip()
+        return self._clean_llm_prompt(text)
+
+    def _clean_llm_prompt(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:text|txt|prompt)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        text = re.sub(r"^(prompt|optimized prompt|final prompt)\s*[:：]\s*", "", text, flags=re.I).strip()
+        return text.strip().strip("\"'")
 
     def _need_value(self, parts: list[str], index: int, option: str) -> str:
         if index >= len(parts):
