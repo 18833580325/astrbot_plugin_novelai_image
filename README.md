@@ -80,14 +80,16 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 - `disabled_end_time`: `08:00`
 - `daily_quota_limit`: `10`
 - `allowed_user_ids`: 白名单用户 QQ 号，白名单不限量，也不受禁用时间段限制。
+- `unrestricted_user_ids`: 无限制用户 QQ 号，不限量、不受禁用时间段限制，并且跳过视觉审核。
 - `blacklist_user_ids`: 黑名单用户 QQ 号，黑名单不能生图。
 
 规则优先级：
 
 1. 黑名单优先，命中后直接拒绝。
-2. 白名单放行，不检查每日额度和禁用时间段。
-3. 普通用户在 `23:00-08:00` 暂停使用。
-4. 普通用户每天最多成功生成 `10` 张。
+2. 无限制用户放行，不检查每日额度和禁用时间段，生成后不做视觉审核。
+3. 白名单放行，不检查每日额度和禁用时间段，但仍按视觉审核配置执行。
+4. 普通用户在 `23:00-08:00` 暂停使用。
+5. 普通用户每天最多成功生成 `10` 张。
 
 每日额度只在图片成功生成并保存后计数。额度数据保存在：
 
@@ -104,6 +106,8 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 ```
 
 优化后的 prompt 会写入后台日志，方便排查效果。
+
+如果用户在 `unrestricted_user_ids` 中，`-llm` 会使用 `unrestricted_llm_prompt_optimizer_prompt`。这个配置可以写得更偏“自然语言转 NovelAI tag”，不影响普通用户的提示词优化规则。
 
 ## 比例
 

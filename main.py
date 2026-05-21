@@ -321,7 +321,10 @@ class NovelAIImagePlugin(Star):
         return None
 
     def _is_quota_exempt(self, sender_id: str) -> bool:
-        return sender_id in self._string_list("allowed_user_ids")
+        return sender_id in self._string_list("allowed_user_ids") or self._is_unrestricted_user(sender_id)
+
+    def _is_unrestricted_user(self, sender_id: str) -> bool:
+        return sender_id in self._string_list("unrestricted_user_ids")
 
     def _disabled_time_reason(self) -> str | None:
         if not bool(self.config.get("time_limit_enabled", True)):
@@ -503,7 +506,13 @@ class NovelAIImagePlugin(Star):
         if not provider_id:
             raise RuntimeError("当前会话没有可用的大模型 Provider。")
 
-        system_prompt = str(self.config.get("llm_prompt_optimizer_prompt", "")).strip()
+        sender_id = str(event.get_sender_id())
+        if self._is_unrestricted_user(sender_id):
+            system_prompt = str(self.config.get("unrestricted_llm_prompt_optimizer_prompt", "")).strip()
+            if not system_prompt:
+                system_prompt = str(self.config.get("llm_prompt_optimizer_prompt", "")).strip()
+        else:
+            system_prompt = str(self.config.get("llm_prompt_optimizer_prompt", "")).strip()
         if not system_prompt:
             system_prompt = (
                 "你是 NovelAI 提示词优化器。把用户输入改写为适合 NovelAI/anime diffusion 的英文提示词。"
@@ -706,6 +715,10 @@ class NovelAIImagePlugin(Star):
     async def _review_image(
         self, image_bytes: bytes, request: NovelAIRequest, event: AstrMessageEvent
     ) -> tuple[bool, str]:
+        if self._is_unrestricted_user(str(event.get_sender_id())):
+            logger.info("NovelAI vision review skipped for unrestricted user.")
+            return True, ""
+
         if not bool(self.config.get("vision_review_enabled", False)):
             return True, ""
 

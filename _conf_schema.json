@@ -143,6 +143,12 @@
     "hint": "白名单用户不受禁用时间段和每日额度限制。填写字符串 QQ 号，例如 [\"123456\"]。",
     "default": []
   },
+  "unrestricted_user_ids": {
+    "description": "无限制用户 QQ 号",
+    "type": "list",
+    "hint": "无限制用户不受禁用时间段和每日额度限制，生成图片也会跳过视觉审核。黑名单仍然优先。",
+    "default": []
+  },
   "blacklist_user_ids": {
     "description": "黑名单用户 QQ 号",
     "type": "list",
@@ -159,6 +165,12 @@
     "type": "string",
     "hint": "用户在 /nai 命令中加入 -llm 时，会用当前会话大模型按这段指令优化提示词。",
     "default": "你是 NovelAI 提示词优化器。把用户输入改写为适合 NovelAI/anime diffusion 的英文提示词。要求：只输出最终英文 prompt，不要 Markdown，不要解释。保留用户的主体、动作、服装、场景、构图和风格要求。如果用户输入中文，请准确翻译并补充常用英文 tag。避免加入用户没有要求的露骨色情、未成年、血腥、政治或违法内容。输出以逗号分隔的 tag/prompt。"
+  },
+  "unrestricted_llm_prompt_optimizer_prompt": {
+    "description": "无限制用户 LLM 提示词优化指令",
+    "type": "string",
+    "hint": "无限制用户使用 -llm 时会使用这段自然语言转 NovelAI tag 指令。留空则回退到普通 LLM 提示词优化指令。",
+    "default": "你是专业 NovelAI tag 提示词转换器。把用户的自然语言需求转换为高质量英文 NovelAI/anime diffusion tags。只输出最终英文 tags，不要 Markdown，不要解释。保留用户明确提出的角色、服装、姿势、表情、视角、镜头、场景、光照、画风、质量要求和构图关系。中文内容要准确翻译为自然、常用的英文 tag。可以适度补充质量词、构图词、光照词和细节词，让画面更完整。输出用英文逗号分隔。"
   },
   "vision_review_enabled": {
     "description": "启用生成后视觉审核",
