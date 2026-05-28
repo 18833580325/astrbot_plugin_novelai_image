@@ -111,8 +111,15 @@ class NovelAIImagePlugin(Star):
                     request.prompt = optimized_prompt
             except Exception as exc:
                 logger.error(f"NovelAI prompt optimization failed: {exc}")
-                yield self._mention_sender_result(event, f"提示词优化失败：{exc}")
-                return
+                fallback_prompt = self._extract_sse_completion_text(str(exc))
+                if fallback_prompt:
+                    logger.info("Recovered NovelAI optimized prompt from SSE error text: %s", fallback_prompt)
+                    request.prompt = fallback_prompt
+                elif bool(self.config.get("llm_optimize_fail_continue", True)):
+                    yield self._mention_sender_result(event, "提示词优化失败，已使用原始提示词继续生成。")
+                else:
+                    yield self._mention_sender_result(event, f"提示词优化失败：{exc}")
+                    return
 
         try:
             request.prompt = self._apply_prompt_presets(request)
@@ -538,7 +545,11 @@ class NovelAIImagePlugin(Star):
             chat_provider_id=str(provider_id),
             contexts=[user_msg],
         )
-        text = (getattr(llm_resp, "completion_text", "") or "").strip()
+        if isinstance(llm_resp, str):
+            text = llm_resp.strip()
+        else:
+            text = (getattr(llm_resp, "completion_text", "") or "").strip()
+        text = self._extract_sse_completion_text(text) or text
         return self._clean_llm_prompt(text)
 
     def _clean_llm_prompt(self, text: str) -> str:
@@ -548,6 +559,33 @@ class NovelAIImagePlugin(Star):
             text = re.sub(r"\s*```$", "", text)
         text = re.sub(r"^(prompt|optimized prompt|final prompt)\s*[:：]\s*", "", text, flags=re.I).strip()
         return text.strip().strip("\"'")
+
+    def _extract_sse_completion_text(self, text: str) -> str:
+        if "data:" not in text:
+            return ""
+        parts = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except Exception:
+                continue
+            for choice in data.get("choices", []) or []:
+                delta = choice.get("delta") or {}
+                message = choice.get("message") or {}
+                for value in (
+                    delta.get("content"),
+                    message.get("content"),
+                    choice.get("text"),
+                ):
+                    if isinstance(value, str) and value:
+                        parts.append(value)
+        return "".join(parts).strip()
 
     def _need_value(self, parts: list[str], index: int, option: str) -> str:
         if index >= len(parts):

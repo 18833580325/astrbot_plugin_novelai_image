@@ -172,6 +172,12 @@
     "hint": "无限制用户使用 -llm 时会使用这段自然语言转 NovelAI tag 指令。留空则回退到普通 LLM 提示词优化指令。",
     "default": "你是专业 NovelAI tag 提示词转换器。把用户的自然语言需求转换为高质量英文 NovelAI/anime diffusion tags。只输出最终英文 tags，不要 Markdown，不要解释。保留用户明确提出的角色、服装、姿势、表情、视角、镜头、场景、光照、画风、质量要求和构图关系。中文内容要准确翻译为自然、常用的英文 tag。可以适度补充质量词、构图词、光照词和细节词，让画面更完整。输出用英文逗号分隔。"
   },
+  "llm_optimize_fail_continue": {
+    "description": "LLM 优化失败时继续生图",
+    "type": "bool",
+    "hint": "开启后，-llm 优化遇到上游流式/非流式返回异常、空响应或网络错误时，会使用原始提示词继续生成，而不是中断画图。",
+    "default": true
+  },
   "vision_review_enabled": {
     "description": "启用生成后视觉审核",
     "type": "bool",

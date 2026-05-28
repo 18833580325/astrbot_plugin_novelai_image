@@ -109,6 +109,13 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 
 如果用户在 `unrestricted_user_ids` 中，`-llm` 会使用 `unrestricted_llm_prompt_optimizer_prompt`。这个配置可以写得更偏“自然语言转 NovelAI tag”，不影响普通用户的提示词优化规则。
 
+插件会兼容两类 LLM 返回：
+
+- 非流式：AstrBot 正常返回 `completion_text`
+- 流式文本：上游误返回 `data: ...` / `data: [DONE]` 形式时，插件会尝试从 SSE 文本中提取内容
+
+如果 `-llm` 优化失败且 `llm_optimize_fail_continue` 开启，插件会使用原始提示词继续生成，避免画图任务直接中断。
+
 ## 比例
 
 - `1:1`: 1024x1024
