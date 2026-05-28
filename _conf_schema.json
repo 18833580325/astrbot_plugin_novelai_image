@@ -178,6 +178,12 @@
     "hint": "开启后，-llm 优化遇到上游流式/非流式返回异常、空响应或网络错误时，会使用原始提示词继续生成，而不是中断画图。",
     "default": true
   },
+  "llm_force_non_stream": {
+    "description": "LLM 优化强制非流式",
+    "type": "bool",
+    "hint": "开启后，-llm 提示词优化会优先尝试向 AstrBot 传 stream=False；如果当前 AstrBot 版本不支持该参数，会自动回退。",
+    "default": true
+  },
   "vision_review_enabled": {
     "description": "启用生成后视觉审核",
     "type": "bool",

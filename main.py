@@ -541,16 +541,28 @@ class NovelAIImagePlugin(Star):
                 )
             ]
         )
-        llm_resp = await self.context.llm_generate(
-            chat_provider_id=str(provider_id),
-            contexts=[user_msg],
-        )
+        llm_resp = await self._llm_generate_for_optimizer(str(provider_id), user_msg)
         if isinstance(llm_resp, str):
             text = llm_resp.strip()
         else:
             text = (getattr(llm_resp, "completion_text", "") or "").strip()
         text = self._extract_sse_completion_text(text) or text
         return self._clean_llm_prompt(text)
+
+    async def _llm_generate_for_optimizer(self, provider_id: str, user_msg: UserMessageSegment):
+        if bool(self.config.get("llm_force_non_stream", True)):
+            try:
+                return await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    contexts=[user_msg],
+                    stream=False,
+                )
+            except TypeError as exc:
+                logger.warning(f"AstrBot llm_generate does not accept stream=False, fallback: {exc}")
+        return await self.context.llm_generate(
+            chat_provider_id=provider_id,
+            contexts=[user_msg],
+        )
 
     def _clean_llm_prompt(self, text: str) -> str:
         text = text.strip()
