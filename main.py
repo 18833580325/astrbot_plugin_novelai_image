@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import inspect
 import json
 import random
 import re
@@ -77,6 +78,8 @@ class NovelAIImagePlugin(Star):
         self._output_dir = Path("/AstrBot/data/plugin_data/novelai_image/outputs")
         self._quota_file = Path("/AstrBot/data/plugin_data/novelai_image/quota_usage.json")
         self._quota_usage = self._load_quota_usage()
+        self._review_violation_file = Path("/AstrBot/data/plugin_data/novelai_image/review_violations.json")
+        self._review_violations = self._load_review_violations()
         self._generation_lock = asyncio.Lock()
         self._queue_waiting = 0
 
@@ -168,6 +171,14 @@ class NovelAIImagePlugin(Star):
             if not allowed:
                 if reason:
                     logger.warning(f"NovelAI image blocked by vision review: {reason}")
+                violation_count, auto_blacklisted = self._record_review_violation(sender_id, reason)
+                logger.warning(
+                    "NovelAI review violation recorded. user=%s daily_count=%s auto_blacklisted=%s reason=%s",
+                    sender_id,
+                    violation_count,
+                    auto_blacklisted,
+                    reason,
+                )
                 block_reply = str(self.config.get("vision_block_reply", "您生成的内容被拦截。"))
                 yield self._mention_sender_result(event, block_reply)
                 return
@@ -211,6 +222,47 @@ class NovelAIImagePlugin(Star):
                 ]
             )
         )
+
+    @filter.command("nai_stats", alias={"nai统计", "nai违规统计", "novelai_stats"})
+    async def stats(self, event: AstrMessageEvent):
+        sender_id = str(event.get_sender_id())
+        if not self._can_view_stats(event, sender_id):
+            yield self._mention_sender_result(event, "你没有权限查看 NovelAI 违规统计。")
+            return
+
+        self._ensure_review_violation_day()
+        daily = self._review_violations.get("daily", {})
+        users = daily.get("users", {}) if isinstance(daily, dict) else {}
+        total = self._review_violations.get("total", {})
+        auto_blacklist = self._auto_blacklist_user_ids()
+        threshold = int(self.config.get("vision_auto_blacklist_threshold", 3))
+
+        ranked = sorted(
+            users.items(),
+            key=lambda item: int(item[1].get("count", 0)) if isinstance(item[1], dict) else int(item[1] or 0),
+            reverse=True,
+        )
+        lines = [
+            "NovelAI 违规审核统计",
+            f"日期：{daily.get('date', self._review_day_key())}",
+            f"自动拉黑阈值：{threshold} 次/天",
+            f"今日违规用户数：{len(users)}",
+            f"自动黑名单人数：{len(auto_blacklist)}",
+            "",
+            "今日 Top：",
+        ]
+        if ranked:
+            for user_id, item in ranked[:10]:
+                count = int(item.get("count", 0)) if isinstance(item, dict) else int(item or 0)
+                total_count = 0
+                if isinstance(total, dict) and isinstance(total.get(user_id), dict):
+                    total_count = int(total[user_id].get("count", 0))
+                blacklisted = "，已拉黑" if user_id in auto_blacklist else ""
+                lines.append(f"{user_id}: 今日 {count} 次，累计 {total_count} 次{blacklisted}")
+        else:
+            lines.append("暂无")
+
+        yield event.plain_result("\n".join(lines))
 
     def _parse_request(self, message: str) -> NovelAIRequest:
         text = re.sub(r"^[/！!]?(nai画图|nai生图|novelai|nai)\s*", "", message, flags=re.I).strip()
@@ -307,7 +359,7 @@ class NovelAIImagePlugin(Star):
         )
 
     def _check_usage_policy(self, sender_id: str) -> str | None:
-        if sender_id in self._string_list("blacklist_user_ids"):
+        if sender_id in self._string_list("blacklist_user_ids") or sender_id in self._auto_blacklist_user_ids():
             return str(self.config.get("blacklist_reply", "你已被加入 NovelAI 画图黑名单，无法使用该功能。"))
 
         if self._is_quota_exempt(sender_id):
@@ -401,6 +453,110 @@ class NovelAIImagePlugin(Star):
                 json.dump(self._quota_usage, file, ensure_ascii=False, indent=2)
         except Exception as exc:
             logger.warning(f"Failed to save NovelAI quota usage: {exc}")
+
+    def _review_day_key(self) -> str:
+        return self._quota_key()
+
+    def _empty_review_violations(self) -> dict:
+        return {
+            "daily": {"date": self._review_day_key(), "users": {}},
+            "total": {},
+            "auto_blacklist_user_ids": [],
+        }
+
+    def _load_review_violations(self) -> dict:
+        try:
+            if self._review_violation_file.exists():
+                with open(self._review_violation_file, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+                if isinstance(data, dict):
+                    data.setdefault("daily", {"date": self._review_day_key(), "users": {}})
+                    data.setdefault("total", {})
+                    data.setdefault("auto_blacklist_user_ids", [])
+                    return data
+        except Exception as exc:
+            logger.warning(f"Failed to load NovelAI review violations: {exc}")
+        return self._empty_review_violations()
+
+    def _save_review_violations(self):
+        try:
+            self._review_violation_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._review_violation_file, "w", encoding="utf-8") as file:
+                json.dump(self._review_violations, file, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"Failed to save NovelAI review violations: {exc}")
+
+    def _ensure_review_violation_day(self):
+        day = self._review_day_key()
+        daily = self._review_violations.get("daily")
+        if not isinstance(daily, dict) or daily.get("date") != day:
+            self._review_violations["daily"] = {"date": day, "users": {}}
+            self._review_violations.setdefault("total", {})
+            self._review_violations.setdefault("auto_blacklist_user_ids", [])
+            self._save_review_violations()
+
+    def _record_review_violation(self, sender_id: str, reason: str) -> tuple[int, bool]:
+        self._ensure_review_violation_day()
+        now = datetime.now(self._local_timezone()).isoformat(timespec="seconds")
+        daily = self._review_violations.setdefault("daily", {"date": self._review_day_key(), "users": {}})
+        users = daily.setdefault("users", {})
+        item = users.setdefault(sender_id, {"count": 0})
+        item["count"] = int(item.get("count", 0)) + 1
+        item["last_reason"] = reason
+        item["last_at"] = now
+
+        total = self._review_violations.setdefault("total", {})
+        total_item = total.setdefault(sender_id, {"count": 0})
+        total_item["count"] = int(total_item.get("count", 0)) + 1
+        total_item["last_reason"] = reason
+        total_item["last_at"] = now
+        total_item["last_day"] = self._review_day_key()
+
+        threshold = int(self.config.get("vision_auto_blacklist_threshold", 3))
+        auto_blacklisted = False
+        if threshold > 0 and item["count"] >= threshold:
+            auto_blacklist = self._review_violations.setdefault("auto_blacklist_user_ids", [])
+            if sender_id not in auto_blacklist:
+                auto_blacklist.append(sender_id)
+                auto_blacklisted = True
+            total_item["auto_blacklisted"] = True
+
+        self._save_review_violations()
+        return int(item["count"]), auto_blacklisted
+
+    def _auto_blacklist_user_ids(self) -> list[str]:
+        value = self._review_violations.get("auto_blacklist_user_ids", [])
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def _can_view_stats(self, event: AstrMessageEvent, sender_id: str) -> bool:
+        if self._is_unrestricted_user(sender_id):
+            return True
+        for method_name in ("is_admin", "is_admin_event"):
+            method = getattr(event, method_name, None)
+            if callable(method):
+                try:
+                    result = method()
+                    if inspect.isawaitable(result):
+                        close = getattr(result, "close", None)
+                        if callable(close):
+                            close()
+                        continue
+                    if bool(result):
+                        return True
+                except Exception:
+                    pass
+
+        config = self._load_astrbot_config()
+        candidates = []
+        for key in ("admins_id", "admins", "admin_users", "admin_qq", "admin_user_ids", "superusers"):
+            value = config.get(key) if isinstance(config, dict) else None
+            if isinstance(value, list):
+                candidates.extend(value)
+            elif isinstance(value, str):
+                candidates.extend(value.replace("\n", ",").split(","))
+        return sender_id in {str(item).strip() for item in candidates if str(item).strip()}
 
     def _string_list(self, key: str) -> list[str]:
         value = self.config.get(key, [])

@@ -232,6 +232,12 @@
     "hint": "开启后，如果视觉审核接口报错或超时，图片不会发送。关闭则审核失败时放行。",
     "default": false
   },
+  "vision_auto_blacklist_threshold": {
+    "description": "审核违规自动拉黑阈值",
+    "type": "int",
+    "hint": "同一用户当天生成图片审核不通过达到该次数后，会加入插件自动黑名单。每日违规计数会刷新，但自动黑名单不会刷新。设为 0 可关闭自动拉黑。",
+    "default": 3
+  },
   "vision_block_reply": {
     "description": "视觉审核拦截回复",
     "type": "string",

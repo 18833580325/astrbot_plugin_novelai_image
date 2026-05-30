@@ -30,6 +30,7 @@ AstrBot NovelAI 画图插件，独立于 `astrbot_plugin_grsai_image`。
 /nai --uc "lowres, bad anatomy" 提示词
 /nai -llm 中文提示词
 /nai_help
+/nai_stats
 ```
 
 ## 模型简称
@@ -163,6 +164,15 @@ https://image.novelai.net/ai/generate-image
 - `vision_api_key`: 仅 `custom_openai` 需要，视觉模型 API Key
 - `vision_model`: 仅 `custom_openai` 需要，支持图片输入的模型名
 - `vision_review_fail_closed`: 审核接口失败时是否禁止发送
+- `vision_auto_blacklist_threshold`: 同一用户当天审核不通过达到该次数后自动加入插件黑名单，默认 `3`，设为 `0` 可关闭
 - `vision_block_reply`: 发给用户的简短拦截提示，具体原因只写入后台日志
 
 如果使用 `astrbot_caption`，请先在 AstrBot 中配置 `provider_settings.default_image_caption_provider_id` 对应的视觉模型。
+
+审核不通过次数会记录到：
+
+```text
+/AstrBot/data/plugin_data/novelai_image/review_violations.json
+```
+
+每日违规计数会按 `timezone` 自动刷新，但自动黑名单不会刷新。管理员可发送 `/nai_stats` 查看当天违规次数、累计次数和自动黑名单人数。
