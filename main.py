@@ -75,11 +75,13 @@ class NovelAIImagePlugin(Star):
         super().__init__(context)
         self.config = config
         self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
+        self._plugin_config_file = Path("/AstrBot/data/config/astrbot_plugin_novelai_image_config.json")
         self._output_dir = Path("/AstrBot/data/plugin_data/novelai_image/outputs")
         self._quota_file = Path("/AstrBot/data/plugin_data/novelai_image/quota_usage.json")
         self._quota_usage = self._load_quota_usage()
         self._review_violation_file = Path("/AstrBot/data/plugin_data/novelai_image/review_violations.json")
         self._review_violations = self._load_review_violations()
+        self._migrate_legacy_auto_blacklist()
         self._generation_lock = asyncio.Lock()
         self._queue_waiting = 0
 
@@ -234,7 +236,7 @@ class NovelAIImagePlugin(Star):
         daily = self._review_violations.get("daily", {})
         users = daily.get("users", {}) if isinstance(daily, dict) else {}
         total = self._review_violations.get("total", {})
-        auto_blacklist = self._auto_blacklist_user_ids()
+        blacklist = self._blacklist_user_ids()
         threshold = int(self.config.get("vision_auto_blacklist_threshold", 3))
 
         ranked = sorted(
@@ -247,7 +249,7 @@ class NovelAIImagePlugin(Star):
             f"日期：{daily.get('date', self._review_day_key())}",
             f"自动拉黑阈值：{threshold} 次/天",
             f"今日违规用户数：{len(users)}",
-            f"自动黑名单人数：{len(auto_blacklist)}",
+            f"当前黑名单人数：{len(blacklist)}",
             "",
             "今日 Top：",
         ]
@@ -257,7 +259,7 @@ class NovelAIImagePlugin(Star):
                 total_count = 0
                 if isinstance(total, dict) and isinstance(total.get(user_id), dict):
                     total_count = int(total[user_id].get("count", 0))
-                blacklisted = "，已拉黑" if user_id in auto_blacklist else ""
+                blacklisted = "，已拉黑" if user_id in blacklist else ""
                 lines.append(f"{user_id}: 今日 {count} 次，累计 {total_count} 次{blacklisted}")
         else:
             lines.append("暂无")
@@ -359,7 +361,7 @@ class NovelAIImagePlugin(Star):
         )
 
     def _check_usage_policy(self, sender_id: str) -> str | None:
-        if sender_id in self._string_list("blacklist_user_ids") or sender_id in self._auto_blacklist_user_ids():
+        if sender_id in self._blacklist_user_ids():
             return str(self.config.get("blacklist_reply", "你已被加入 NovelAI 画图黑名单，无法使用该功能。"))
 
         if self._is_quota_exempt(sender_id):
@@ -515,20 +517,79 @@ class NovelAIImagePlugin(Star):
         threshold = int(self.config.get("vision_auto_blacklist_threshold", 3))
         auto_blacklisted = False
         if threshold > 0 and item["count"] >= threshold:
-            auto_blacklist = self._review_violations.setdefault("auto_blacklist_user_ids", [])
-            if sender_id not in auto_blacklist:
-                auto_blacklist.append(sender_id)
-                auto_blacklisted = True
+            auto_blacklisted = self._add_to_config_blacklist(sender_id)
             total_item["auto_blacklisted"] = True
 
         self._save_review_violations()
         return int(item["count"]), auto_blacklisted
 
-    def _auto_blacklist_user_ids(self) -> list[str]:
-        value = self._review_violations.get("auto_blacklist_user_ids", [])
-        if not isinstance(value, list):
-            return []
-        return [str(item).strip() for item in value if str(item).strip()]
+    def _blacklist_user_ids(self) -> list[str]:
+        return self._string_list("blacklist_user_ids")
+
+    def _add_to_config_blacklist(self, sender_id: str) -> bool:
+        blacklist = self._blacklist_user_ids()
+        if sender_id in blacklist:
+            return False
+        blacklist.append(sender_id)
+        self._set_config_value("blacklist_user_ids", blacklist)
+        self._persist_plugin_config_value("blacklist_user_ids", blacklist)
+        return True
+
+    def _migrate_legacy_auto_blacklist(self):
+        legacy_auto_blacklist = self._review_violations.get("auto_blacklist_user_ids", [])
+        if not isinstance(legacy_auto_blacklist, list) or not legacy_auto_blacklist:
+            return
+        changed = False
+        for user_id in [str(item).strip() for item in legacy_auto_blacklist if str(item).strip()]:
+            changed = self._add_to_config_blacklist(user_id) or changed
+        self._review_violations["auto_blacklist_user_ids"] = []
+        self._save_review_violations()
+        if changed:
+            logger.info("Migrated legacy NovelAI auto blacklist into blacklist_user_ids.")
+
+    def _set_config_value(self, key: str, value):
+        try:
+            self.config[key] = value
+        except Exception:
+            try:
+                setattr(self.config, key, value)
+            except Exception as exc:
+                logger.warning(f"Failed to update NovelAI runtime config {key}: {exc}")
+
+        for method_name in ("save", "save_config", "save_plugin_config"):
+            method = getattr(self.config, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method()
+                if inspect.isawaitable(result):
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                return
+            except TypeError:
+                try:
+                    method(self.config)
+                    return
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning(f"Failed to call config save method {method_name}: {exc}")
+
+    def _persist_plugin_config_value(self, key: str, value):
+        try:
+            data = {}
+            if self._plugin_config_file.exists():
+                with open(self._plugin_config_file, "r", encoding="utf-8-sig") as file:
+                    loaded = json.load(file)
+                if isinstance(loaded, dict):
+                    data = loaded
+            data[key] = value
+            self._plugin_config_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._plugin_config_file, "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"Failed to persist NovelAI plugin config {key}: {exc}")
 
     def _can_view_stats(self, event: AstrMessageEvent, sender_id: str) -> bool:
         if self._is_unrestricted_user(sender_id):

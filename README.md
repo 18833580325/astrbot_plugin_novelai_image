@@ -164,7 +164,7 @@ https://image.novelai.net/ai/generate-image
 - `vision_api_key`: 仅 `custom_openai` 需要，视觉模型 API Key
 - `vision_model`: 仅 `custom_openai` 需要，支持图片输入的模型名
 - `vision_review_fail_closed`: 审核接口失败时是否禁止发送
-- `vision_auto_blacklist_threshold`: 同一用户当天审核不通过达到该次数后自动加入插件黑名单，默认 `3`，设为 `0` 可关闭
+- `vision_auto_blacklist_threshold`: 同一用户当天审核不通过达到该次数后自动追加到 `blacklist_user_ids`，默认 `3`，设为 `0` 可关闭
 - `vision_block_reply`: 发给用户的简短拦截提示，具体原因只写入后台日志
 
 如果使用 `astrbot_caption`，请先在 AstrBot 中配置 `provider_settings.default_image_caption_provider_id` 对应的视觉模型。
@@ -175,4 +175,4 @@ https://image.novelai.net/ai/generate-image
 /AstrBot/data/plugin_data/novelai_image/review_violations.json
 ```
 
-每日违规计数会按 `timezone` 自动刷新，但自动黑名单不会刷新。管理员可发送 `/nai_stats` 查看当天违规次数、累计次数和自动黑名单人数。
+每日违规计数会按 `timezone` 自动刷新，但 `blacklist_user_ids` 不会刷新。自动进入黑名单的用户会和你手动录入的黑名单放在一起，你可以在 WebUI 里直接删除对应 QQ 号来撤销。管理员可发送 `/nai_stats` 查看当天违规次数、累计次数和当前黑名单人数。

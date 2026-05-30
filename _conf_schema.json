@@ -235,7 +235,7 @@
   "vision_auto_blacklist_threshold": {
     "description": "审核违规自动拉黑阈值",
     "type": "int",
-    "hint": "同一用户当天生成图片审核不通过达到该次数后，会加入插件自动黑名单。每日违规计数会刷新，但自动黑名单不会刷新。设为 0 可关闭自动拉黑。",
+    "hint": "同一用户当天生成图片审核不通过达到该次数后，会自动追加到 blacklist_user_ids，方便你在 WebUI 手动查看和撤销。每日违规计数会刷新，但黑名单不会刷新。设为 0 可关闭自动拉黑。",
     "default": 3
   },
   "vision_block_reply": {
